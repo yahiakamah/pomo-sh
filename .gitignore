@@ -1,0 +1,14 @@
+# secrets & credentials — NEVER commit these
+.env
+auth/
+traefik/acme.json
+
+# backups & caches
+*.bak
+*.bak.*
+docker-compose.yml.bak.*
+__pycache__/
+*.pyc
+.venv/
+.env.save
+*.save

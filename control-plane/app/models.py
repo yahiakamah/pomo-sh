@@ -1,0 +1,43 @@
+import datetime as dt
+
+from sqlalchemy import DateTime, ForeignKey, String, func
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from .database import Base
+
+
+class Project(Base):
+    __tablename__ = "projects"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    environments: Mapped[list["Environment"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+
+
+class Environment(Base):
+    __tablename__ = "environments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    slug: Mapped[str] = mapped_column(String(40), unique=True, index=True)
+    stage: Mapped[str] = mapped_column(String(20), default="development")
+    state: Mapped[str] = mapped_column(String(20), default="provisioning")
+    odoo_version: Mapped[str] = mapped_column(String(4))
+    url: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    container_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    detail: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"))
+    project: Mapped["Project"] = relationship(back_populates="environments")
+
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

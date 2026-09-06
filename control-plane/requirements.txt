@@ -1,0 +1,8 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+docker==7.1.0
+psycopg[binary]==3.2.3
+pydantic==2.10.4
+SQLAlchemy==2.0.36
+redis==5.2.1
+rq==2.1.0

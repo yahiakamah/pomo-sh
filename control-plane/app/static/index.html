@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Pomo.sh — Control Plane</title>
+<style>
+  :root{
+    --bg:#0b0e14; --panel:#121722; --panel2:#171d2b; --border:#232b3b;
+    --text:#e6ebf5; --muted:#8592a8; --accent:#5b8cff; --accent2:#3a63c0;
+    --green:#2fbf71; --amber:#e0a92e; --red:#e5484d; --gray:#5b6577;
+    --radius:12px; --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;line-height:1.5}
+  a{color:var(--accent);text-decoration:none}
+  .wrap{max-width:1100px;margin:0 auto;padding:24px 20px 80px}
+  header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:24px}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:18px;letter-spacing:.2px}
+  .brand .dot{width:11px;height:11px;border-radius:50%;background:var(--accent);box-shadow:0 0 12px var(--accent)}
+  .brand small{color:var(--muted);font-weight:500;font-size:12px}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:22px}
+  .stat{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px}
+  .stat .n{font-size:26px;font-weight:700}
+  .stat .l{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.6px;margin-top:2px}
+  button{font-family:var(--sans);font-size:13px;border-radius:9px;border:1px solid var(--border);
+    background:var(--panel2);color:var(--text);padding:8px 13px;cursor:pointer;transition:.15s}
+  button:hover{border-color:var(--accent2)}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#08122b;font-weight:600}
+  button.primary:hover{background:#6f9bff}
+  button.ghost{background:transparent}
+  button.danger:hover{border-color:var(--red);color:var(--red)}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+  th,td{text-align:left;padding:12px 14px;border-bottom:1px solid var(--border);vertical-align:middle}
+  th{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.6px;font-weight:600}
+  tr:last-child td{border-bottom:none}
+  td .slug{font-family:var(--mono);font-weight:600}
+  td .sub{color:var(--muted);font-size:12px}
+  .badge{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600;border:1px solid transparent}
+  .badge .d{width:7px;height:7px;border-radius:50%}
+  .b-running{color:var(--green);background:rgba(47,191,113,.1)} .b-running .d{background:var(--green)}
+  .b-provisioning,.b-queued,.b-destroying{color:var(--amber);background:rgba(224,169,46,.1)} .b-provisioning .d,.b-queued .d,.b-destroying .d{background:var(--amber);animation:pulse 1.1s infinite}
+  .b-stopped{color:var(--gray);background:rgba(91,101,119,.14)} .b-stopped .d{background:var(--gray)}
+  .b-error{color:var(--red);background:rgba(229,72,77,.1)} .b-error .d{background:var(--red)}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+  .actions{display:flex;gap:6px;justify-content:flex-end}
+  .actions button{padding:5px 9px;font-size:12px}
+  .empty{text-align:center;color:var(--muted);padding:44px}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:18px;margin-bottom:18px}
+  .card h3{margin:0 0 14px;font-size:15px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
+  label.f{display:block;font-size:12px;color:var(--muted);margin-bottom:5px}
+  input,select{width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);
+    border-radius:8px;padding:9px 11px;font-family:var(--sans);font-size:13px}
+  input:focus,select:focus{outline:none;border-color:var(--accent)}
+  .hidden{display:none}
+  .msg{padding:10px 13px;border-radius:8px;font-size:13px;margin-bottom:12px}
+  .msg.err{background:rgba(229,72,77,.12);color:#ff9a9d;border:1px solid rgba(229,72,77,.3)}
+  .detail{font-size:11px;color:#ff9a9d;font-family:var(--mono);max-width:280px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .foot{color:var(--muted);font-size:12px;margin-top:18px;text-align:center}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand"><span class="dot"></span> Pomo.sh <small>Control Plane</small></div>
+    <div class="row">
+      <button class="ghost" id="refreshBtn">↻ Refresh</button>
+      <button class="primary" id="newBtn">+ New instance</button>
+    </div>
+  </header>
+
+  <div class="stats" id="stats"></div>
+
+  <div class="card hidden" id="createCard">
+    <h3>Create instance</h3>
+    <div id="createMsg"></div>
+    <div class="grid">
+      <div><label class="f">Slug (subdomain)</label><input id="f-slug" placeholder="client1" /></div>
+      <div><label class="f">Project</label><input id="f-project" placeholder="client1" /></div>
+      <div><label class="f">Odoo version</label>
+        <select id="f-version"><option>18</option><option>17</option><option>16</option><option>19</option></select></div>
+      <div><label class="f">Stage</label>
+        <select id="f-stage"><option value="development">development</option><option value="staging">staging</option><option value="production">production</option></select></div>
+    </div>
+    <div class="row" style="margin-top:14px;justify-content:flex-end">
+      <button class="ghost" id="cancelBtn">Cancel</button>
+      <button class="primary" id="submitBtn">Create</button>
+    </div>
+  </div>
+
+  <table>
+    <thead><tr><th>Instance</th><th>Stage</th><th>Version</th><th>Status</th><th></th></tr></thead>
+    <tbody id="rows"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
+  </table>
+
+  <div class="foot">Auto-refreshes every 4s · <span id="ts"></span></div>
+</div>
+
+<script>
+const API = "/api/v1";
+const $ = (id) => document.getElementById(id);
+const opts = { headers: { "Content-Type": "application/json" }, credentials: "same-origin" };
+
+async function api(path, method="GET", body=null){
+  const res = await fetch(API+path, {...opts, method, body: body?JSON.stringify(body):null});
+  let data = null; try { data = await res.json(); } catch(e){}
+  if(!res.ok) throw new Error((data && data.detail) ? JSON.stringify(data.detail) : ("HTTP "+res.status));
+  return data;
+}
+
+function badge(state){
+  return `<span class="badge b-${state}"><span class="d"></span>${state}</span>`;
+}
+
+function actionsFor(e){
+  const running = e.state === "running";
+  const busy = ["queued","provisioning","destroying"].includes(e.state);
+  return `
+    <div class="actions">
+      ${running ? `<a href="${e.url}" target="_blank"><button class="ghost">Open</button></a>` : ""}
+      ${running ? `<button class="ghost" data-act="stop" data-slug="${e.slug}">Stop</button>`
+                : (e.state==="stopped" ? `<button class="ghost" data-act="start" data-slug="${e.slug}">Start</button>` : "")}
+      ${running ? `<button class="ghost" data-act="restart" data-slug="${e.slug}">Restart</button>` : ""}
+      <button class="ghost danger" data-act="delete" data-slug="${e.slug}" ${busy?"disabled":""}>Delete</button>
+    </div>`;
+}
+
+function renderStats(envs, projects){
+  const running = envs.filter(e=>e.state==="running").length;
+  const busy = envs.filter(e=>["queued","provisioning","destroying"].includes(e.state)).length;
+  const err = envs.filter(e=>e.state==="error").length;
+  $("stats").innerHTML = [
+    ["Projects", projects.length],
+    ["Instances", envs.length],
+    ["Running", running],
+    ["In progress", busy],
+    ["Errors", err],
+  ].map(([l,n])=>`<div class="stat"><div class="n">${n}</div><div class="l">${l}</div></div>`).join("");
+}
+
+function renderRows(envs){
+  if(!envs.length){ $("rows").innerHTML = `<tr><td colspan="5" class="empty">No instances yet. Click “New instance”.</td></tr>`; return; }
+  $("rows").innerHTML = envs.map(e=>`
+    <tr>
+      <td><div class="slug">${e.slug}</div><div class="sub">${e.project_name||"—"} · ${e.slug}.${location.hostname.replace(/^api\./,"")}</div>
+          ${e.state==="error"&&e.detail?`<div class="detail" title="${(e.detail||"").replace(/"/g,"&quot;")}">${e.detail}</div>`:""}</td>
+      <td><span class="sub">${e.stage||"—"}</span></td>
+      <td><span class="sub">Odoo ${e.odoo_version||"—"}</span></td>
+      <td>${badge(e.state)}</td>
+      <td>${actionsFor(e)}</td>
+    </tr>`).join("");
+}
+
+async function load(){
+  try{
+    const [envs, projects] = await Promise.all([api("/environments"), api("/projects")]);
+    envs.sort((a,b)=> (a.slug>b.slug?1:-1));
+    renderStats(envs, projects);
+    renderRows(envs);
+    $("ts").textContent = "updated " + new Date().toLocaleTimeString();
+  }catch(err){
+    $("rows").innerHTML = `<tr><td colspan="5" class="empty">Error loading: ${err.message}</td></tr>`;
+  }
+}
+
+document.addEventListener("click", async (ev)=>{
+  const btn = ev.target.closest("button[data-act]");
+  if(!btn) return;
+  const {act, slug} = btn.dataset;
+  if(act==="delete"){
+    if(!confirm(`Delete instance “${slug}”?\n\nOK = remove container (keep data)\nThe database is preserved unless you wipe it later.`)) return;
+    btn.disabled = true;
+    try{ await api(`/environments/${slug}`, "DELETE"); }catch(e){ alert(e.message); }
+  } else {
+    btn.disabled = true;
+    try{ await api(`/environments/${slug}/${act}`, "POST"); }catch(e){ alert(e.message); }
+  }
+  load();
+});
+
+$("newBtn").onclick = ()=>{ $("createCard").classList.remove("hidden"); $("createMsg").innerHTML=""; $("f-slug").focus(); };
+$("cancelBtn").onclick = ()=> $("createCard").classList.add("hidden");
+$("refreshBtn").onclick = load;
+
+$("submitBtn").onclick = async ()=>{
+  const slug = $("f-slug").value.trim();
+  const project_name = ($("f-project").value.trim() || slug || "default");
+  const body = { slug, project_name, odoo_version: $("f-version").value, stage: $("f-stage").value };
+  $("createMsg").innerHTML = "";
+  $("submitBtn").disabled = true;
+  try{
+    await api("/environments", "POST", body);
+    $("createCard").classList.add("hidden");
+    $("f-slug").value=""; $("f-project").value="";
+    load();
+  }catch(err){
+    $("createMsg").innerHTML = `<div class="msg err">${err.message}</div>`;
+  }finally{
+    $("submitBtn").disabled = false;
+  }
+};
+
+load();
+setInterval(load, 4000);
+</script>
+</body>
+</html>

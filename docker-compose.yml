@@ -1,0 +1,106 @@
+services:
+  traefik:
+    image: traefik:v3.6
+    restart: unless-stopped
+    environment:
+      - CF_DNS_API_TOKEN=${CF_DNS_API_TOKEN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/traefik.yml:/traefik.yml:ro
+      - ./traefik/acme.json:/letsencrypt/acme.json
+      - ./auth:/auth:ro
+    networks: [pomo_edge]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.dashboard.rule=Host(`traefik.pomotech.sh`)"
+      - "traefik.http.routers.dashboard.entrypoints=websecure"
+      - "traefik.http.routers.dashboard.service=api@internal"
+      - "traefik.http.routers.dashboard.tls.certresolver=cloudflare"
+      - "traefik.http.routers.dashboard.tls.domains[0].main=pomotech.sh"
+      - "traefik.http.routers.dashboard.tls.domains[0].sans=*.pomotech.sh"
+      - "traefik.http.routers.dashboard.middlewares=dashauth"
+      - "traefik.http.middlewares.dashauth.basicauth.usersfile=/auth/users"
+
+  whoami:
+    image: traefik/whoami
+    restart: unless-stopped
+    networks: [pomo_edge]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.whoami.rule=Host(`hello.pomotech.sh`)"
+      - "traefik.http.routers.whoami.entrypoints=websecure"
+      - "traefik.http.routers.whoami.tls.certresolver=cloudflare"
+
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    networks: [pomo_internal]
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    networks: [pomo_internal]
+
+  control_plane:
+    build: ./control-plane
+    restart: unless-stopped
+    depends_on: [postgres, redis]
+    environment:
+      - POSTGRES_HOST=postgres
+      - REDIS_URL=redis://redis:6379/0
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - BASE_DOMAIN=pomotech.sh
+      - EDGE_NETWORK=pomo_edge
+      - INTERNAL_NETWORK=pomo_internal
+      - CERT_RESOLVER=cloudflare
+      - DEFAULT_ODOO_IMAGE=odoo:{version}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [pomo_edge, pomo_internal]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=pomo_edge"
+      - "traefik.http.routers.api.rule=Host(`api.pomotech.sh`)"
+      - "traefik.http.routers.api.entrypoints=websecure"
+      - "traefik.http.routers.api.tls.certresolver=cloudflare"
+      - "traefik.http.routers.api.middlewares=apiauth"
+      - "traefik.http.middlewares.apiauth.basicauth.usersfile=/auth/users"
+      - "traefik.http.services.api.loadbalancer.server.port=8000"
+
+  worker:
+    build: ./control-plane
+    restart: unless-stopped
+    depends_on: [postgres, redis]
+    command: ["rq", "worker", "--url", "redis://redis:6379/0", "provisioning"]
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - REDIS_URL=redis://redis:6379/0
+      - BASE_DOMAIN=pomotech.sh
+      - EDGE_NETWORK=pomo_edge
+      - INTERNAL_NETWORK=pomo_internal
+      - CERT_RESOLVER=cloudflare
+      - DEFAULT_ODOO_IMAGE=odoo:{version}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [pomo_edge, pomo_internal]
+
+volumes:
+  pg_data:
+  redis_data:
+
+networks:
+  pomo_edge:
+    external: true
+  pomo_internal:
+    external: true
