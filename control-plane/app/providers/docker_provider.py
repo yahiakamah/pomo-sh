@@ -21,6 +21,9 @@ _STATE_MAP = {
     "dead": "error",
 }
 
+GIT_IMAGE = "alpine/git"
+REPO_MOUNT = "/mnt/repo"
+
 
 def _container_name(slug: str) -> str:
     return f"pomo-inst-{slug}"
@@ -34,8 +37,12 @@ def _role_name(slug: str) -> str:
     return f"odoo_{slug}"
 
 
-def _volume_name(slug: str) -> str:
+def _data_volume(slug: str) -> str:
     return f"pomo_odoo_{slug}"
+
+
+def _src_volume(slug: str) -> str:
+    return f"pomo_src_{slug}"
 
 
 class DockerProvider(InfrastructureProvider):
@@ -62,6 +69,10 @@ class DockerProvider(InfrastructureProvider):
             "USER": _role_name(slug),
             "PASSWORD": password,
         }
+
+    def _addons_path(self, subdir: str) -> str:
+        repo_path = REPO_MOUNT + (f"/{subdir}" if subdir else "")
+        return f"--addons-path={settings.odoo_core_addons_path},{repo_path}"
 
     def _traefik_labels(self, slug: str, version: str) -> dict:
         router = f"pomo-{slug}"
@@ -92,6 +103,38 @@ class DockerProvider(InfrastructureProvider):
             container_id=container.short_id,
         )
 
+    def _clone_repo(self, slug: str, repo_url: str, branch: str, token: str | None) -> str:
+        vol = _src_volume(slug)
+        try:
+            self.client.volumes.get(vol).remove(force=True)
+        except NotFound:
+            pass
+
+        if token:
+            auth_url = repo_url.replace("https://", f"https://{token}@", 1)
+            script = (
+                f"set -e; git clone --branch {branch} --depth 1 {auth_url} /repo; "
+                f"git -C /repo remote set-url origin {repo_url}"
+            )
+        else:
+            script = f"set -e; git clone --branch {branch} --depth 1 {repo_url} /repo"
+
+        try:
+            self.client.containers.run(
+                GIT_IMAGE,
+                entrypoint="",
+                command=["sh", "-c", script],
+                volumes={vol: {"bind": "/repo", "mode": "rw"}},
+                remove=True,
+                detach=False,
+            )
+        except docker.errors.DockerException:
+            raise RuntimeError(
+                f"git clone failed for {repo_url} (branch '{branch}'). "
+                "Check the URL, branch, and token/permissions."
+            ) from None
+        return vol
+
     def create_environment(self, spec: EnvironmentCreate) -> EnvironmentInfo:
         slug, version = spec.slug, spec.odoo_version
         if self._find(slug):
@@ -106,26 +149,40 @@ class DockerProvider(InfrastructureProvider):
         except NotFound:
             self.client.images.pull(image)
 
-        self.pg.ensure_role_and_db(db, role, password)
+        src_vol = None
+        odoo_volumes = {_data_volume(slug): {"bind": "/var/lib/odoo", "mode": "rw"}}
+        addons_arg = None
+        if spec.repo_url:
+            src_vol = self._clone_repo(slug, spec.repo_url, spec.git_branch, spec.git_token)
+            odoo_volumes[src_vol] = {"bind": REPO_MOUNT, "mode": "rw"}
+            addons_arg = self._addons_path(spec.addons_subdir)
 
+        self.pg.ensure_role_and_db(db, role, password)
         env = self._odoo_env(slug, password)
 
+        init_cmd = ["odoo", "-d", db, "-i", ",".join(["base", *spec.modules]),
+                    "--stop-after-init", "--no-http"]
+        if addons_arg:
+            init_cmd.append(addons_arg)
+        init_volumes = {}
+        if src_vol:
+            init_volumes[src_vol] = {"bind": REPO_MOUNT, "mode": "rw"}
         self.client.containers.run(
-            image,
-            command=["odoo", "-d", db, "-i", "base", "--stop-after-init", "--no-http"],
-            environment=env,
-            network=settings.internal_network,
-            remove=True,
-            detach=False,
+            image, command=init_cmd, environment=env,
+            network=settings.internal_network, volumes=init_volumes,
+            remove=True, detach=False,
         )
 
+        run_cmd = ["odoo", "--proxy-mode", f"--db-filter=^{db}$"]
+        if addons_arg:
+            run_cmd.append(addons_arg)
         container = self.client.containers.create(
             image,
             name=_container_name(slug),
-            command=["odoo", "--proxy-mode", f"--db-filter=^{db}$"],
+            command=run_cmd,
             environment=env,
             labels=self._traefik_labels(slug, version),
-            volumes={_volume_name(slug): {"bind": "/var/lib/odoo", "mode": "rw"}},
+            volumes=odoo_volumes,
             network=settings.internal_network,
             restart_policy={"Name": "unless-stopped"},
             detach=True,
@@ -146,10 +203,11 @@ class DockerProvider(InfrastructureProvider):
         if drop_data:
             self.pg.drop_db(_db_name(slug))
             self.pg.drop_role(_role_name(slug))
-            try:
-                self.client.volumes.get(_volume_name(slug)).remove(force=True)
-            except NotFound:
-                pass
+            for vol in (_data_volume(slug), _src_volume(slug)):
+                try:
+                    self.client.volumes.get(vol).remove(force=True)
+                except NotFound:
+                    pass
 
     def get_environment(self, slug: str) -> EnvironmentInfo | None:
         container = self._find(slug)

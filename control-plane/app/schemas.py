@@ -6,6 +6,8 @@ from pydantic import BaseModel, ConfigDict, field_validator
 from .config import settings
 
 SLUG_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$")
+MODULE_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+SUBDIR_RE = re.compile(r"^[A-Za-z0-9._/-]*$")
 
 
 class EnvironmentCreate(BaseModel):
@@ -13,6 +15,12 @@ class EnvironmentCreate(BaseModel):
     odoo_version: str = "18"
     project_name: str = "default"
     stage: str = "development"
+
+    repo_url: str | None = None
+    git_branch: str = "main"
+    addons_subdir: str = ""
+    modules: list[str] = []
+    git_token: str | None = None
 
     @field_validator("slug")
     @classmethod
@@ -41,6 +49,35 @@ class EnvironmentCreate(BaseModel):
             raise ValueError("stage must be development, staging or production")
         return v
 
+    @field_validator("repo_url")
+    @classmethod
+    def _validate_repo(cls, v):
+        if v is None or v.strip() == "":
+            return None
+        v = v.strip()
+        if not v.startswith("https://"):
+            raise ValueError("repo_url must be an https:// git URL")
+        return v
+
+    @field_validator("addons_subdir")
+    @classmethod
+    def _validate_subdir(cls, v: str) -> str:
+        v = (v or "").strip().strip("/")
+        if ".." in v or not SUBDIR_RE.match(v):
+            raise ValueError("invalid addons_subdir")
+        return v
+
+    @field_validator("modules")
+    @classmethod
+    def _validate_modules(cls, v: list[str]) -> list[str]:
+        out = []
+        for m in v or []:
+            m = m.strip()
+            if not MODULE_RE.match(m):
+                raise ValueError(f"invalid module name '{m}'")
+            out.append(m)
+        return out
+
 
 class EnvironmentInfo(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -53,6 +90,8 @@ class EnvironmentInfo(BaseModel):
     container_id: str | None = None
     detail: str | None = None
     project_name: str | None = None
+    repo_url: str | None = None
+    git_branch: str | None = None
     created_at: dt.datetime | None = None
 
 

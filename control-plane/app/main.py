@@ -1,15 +1,17 @@
-from fastapi.responses import RedirectResponse
-from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from . import tasks
 from .config import settings
 from .database import SessionLocal, init_db
 from .models import Environment, Project
 from .providers.docker_provider import DockerProvider
+from .queue import task_queue
 from .schemas import EnvironmentCreate, EnvironmentInfo, ProjectInfo
 
 
@@ -19,7 +21,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Pomo.sh Control Plane", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="Pomo.sh Control Plane", version="0.4.0", lifespan=lifespan)
 
 provider = DockerProvider()
 
@@ -46,6 +48,8 @@ def _to_info(env: Environment) -> EnvironmentInfo:
         container_id=env.container_id,
         detail=env.detail,
         project_name=env.project.name if env.project else None,
+        repo_url=env.repo_url,
+        git_branch=env.git_branch,
         created_at=env.created_at,
     )
 
@@ -76,34 +80,11 @@ def _reconcile(db: Session) -> None:
                     project_id=project.id,
                 )
             )
-        elif row.state not in ("provisioning", "error", "destroying"):
+        elif row.state not in ("queued", "provisioning", "error", "destroying"):
             row.state = info.state
             row.container_id = info.container_id
             row.url = info.url
     db.commit()
-
-
-def _provision(env_id: int, spec: EnvironmentCreate) -> None:
-    db = SessionLocal()
-    try:
-        env = db.get(Environment, env_id)
-        if env is None:
-            return
-        env.state = "provisioning"
-        env.detail = "creating db + container"
-        db.commit()
-        try:
-            info = provider.create_environment(spec)
-            env.state = "running"
-            env.url = info.url
-            env.container_id = info.container_id
-            env.detail = None
-        except Exception as exc:  # noqa: BLE001
-            env.state = "error"
-            env.detail = str(exc)[:500]
-        db.commit()
-    finally:
-        db.close()
 
 
 @app.get("/health")
@@ -128,7 +109,7 @@ def list_environments(db: Session = Depends(get_db)) -> list[EnvironmentInfo]:
 
 
 @app.post("/api/v1/environments", response_model=EnvironmentInfo, status_code=202)
-def create_environment(spec: EnvironmentCreate, background: BackgroundTasks, db: Session = Depends(get_db)):
+def create_environment(spec: EnvironmentCreate, db: Session = Depends(get_db)):
     existing = db.scalar(select(Environment).where(Environment.slug == spec.slug))
     if existing:
         raise HTTPException(409, f"environment '{spec.slug}' already exists")
@@ -137,16 +118,20 @@ def create_environment(spec: EnvironmentCreate, background: BackgroundTasks, db:
     env = Environment(
         slug=spec.slug,
         stage=spec.stage,
-        state="provisioning",
+        state="queued",
         odoo_version=spec.odoo_version,
         url=_url(spec.slug),
+        repo_url=spec.repo_url,
+        git_branch=spec.git_branch,
+        addons_subdir=spec.addons_subdir,
+        modules=",".join(spec.modules),
         project_id=project.id,
     )
     db.add(env)
     db.commit()
     db.refresh(env)
 
-    background.add_task(_provision, env.id, spec)
+    task_queue.enqueue(tasks.provision_environment, env.id, spec.model_dump())
     return _to_info(env)
 
 
@@ -155,7 +140,7 @@ def get_environment(slug: str, db: Session = Depends(get_db)) -> EnvironmentInfo
     env = db.scalar(select(Environment).where(Environment.slug == slug))
     if env is None:
         raise HTTPException(404, f"environment '{slug}' not found")
-    if env.state not in ("provisioning", "error", "destroying"):
+    if env.state not in ("queued", "provisioning", "error", "destroying"):
         info = provider.get_environment(slug)
         if info:
             env.state = info.state
@@ -165,31 +150,13 @@ def get_environment(slug: str, db: Session = Depends(get_db)) -> EnvironmentInfo
 
 
 @app.delete("/api/v1/environments/{slug}", status_code=202)
-def delete_environment(slug: str, background: BackgroundTasks, drop_data: bool = False, db: Session = Depends(get_db)) -> dict:
+def delete_environment(slug: str, drop_data: bool = False, db: Session = Depends(get_db)) -> dict:
     env = db.scalar(select(Environment).where(Environment.slug == slug))
     if env is None:
         raise HTTPException(404, f"environment '{slug}' not found")
     env.state = "destroying"
     db.commit()
-
-    def _destroy() -> None:
-        s = SessionLocal()
-        try:
-            provider.destroy_environment(slug, drop_data=drop_data)
-            row = s.scalar(select(Environment).where(Environment.slug == slug))
-            if row:
-                s.delete(row)
-                s.commit()
-        except Exception as exc:  # noqa: BLE001
-            row = s.scalar(select(Environment).where(Environment.slug == slug))
-            if row:
-                row.state = "error"
-                row.detail = str(exc)[:500]
-                s.commit()
-        finally:
-            s.close()
-
-    background.add_task(_destroy)
+    task_queue.enqueue(tasks.destroy_environment, slug, drop_data)
     return {"slug": slug, "state": "destroying", "drop_data": drop_data}
 
 
@@ -217,5 +184,6 @@ def environment_action(slug: str, action: str, db: Session = Depends(get_db)) ->
 @app.get("/", include_in_schema=False)
 def _root():
     return RedirectResponse(url="/ui/")
+
 
 app.mount("/ui", StaticFiles(directory="app/static", html=True), name="ui")

@@ -32,6 +32,12 @@ class Environment(Base):
     container_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     detail: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
+    repo_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    git_branch: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    addons_subdir: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    modules: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    git_ref: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"))
     project: Mapped["Project"] = relationship(back_populates="environments")
 
