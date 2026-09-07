@@ -4,6 +4,7 @@ import json
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
@@ -12,8 +13,9 @@ from sqlalchemy.orm import Session
 from . import tasks
 from .config import settings
 from .database import SessionLocal, init_db
-from .models import Environment, Project, Repo
+from .models import Environment, Project, Repo, User
 from .providers.docker_provider import DockerProvider
+from .auth import create_token, decode_token, hash_password, verify_password
 from .queue import task_queue
 from .schemas import (
     BackupInfo,
@@ -22,13 +24,31 @@ from .schemas import (
     ProjectInfo,
     RepoCreate,
     RepoInfo,
+    LoginRequest,
     RestoreRequest,
+    TokenResponse,
+    UserInfo,
 )
+
+
+@asynccontextmanager
+def _bootstrap_admin():
+    if not (settings.admin_email and settings.admin_password):
+        return
+    db = SessionLocal()
+    try:
+        email = settings.admin_email.strip().lower()
+        if db.scalar(select(User).where(User.email == email)) is None:
+            db.add(User(email=email, password_hash=hash_password(settings.admin_password), role="superadmin"))
+            db.commit()
+    finally:
+        db.close()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    _bootstrap_admin()
     yield
 
 
@@ -43,6 +63,25 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+bearer = HTTPBearer(auto_error=False)
+
+
+def get_current_user(
+    cred: HTTPAuthorizationCredentials | None = Depends(bearer),
+    db: Session = Depends(get_db),
+) -> User:
+    if cred is None:
+        raise HTTPException(401, "not authenticated")
+    try:
+        payload = decode_token(cred.credentials)
+    except Exception:  # noqa: BLE001
+        raise HTTPException(401, "invalid or expired token")
+    user = db.get(User, int(payload.get("sub", 0)))
+    if user is None:
+        raise HTTPException(401, "user not found")
+    return user
 
 
 def _url(slug: str) -> str:
@@ -124,6 +163,19 @@ def _reconcile(db: Session) -> None:
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
+@app.post("/api/v1/auth/login", response_model=TokenResponse)
+def login(body: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse:
+    user = db.scalar(select(User).where(User.email == body.email.strip().lower()))
+    if user is None or not verify_password(body.password, user.password_hash):
+        raise HTTPException(401, "invalid email or password")
+    return TokenResponse(access_token=create_token(user.id, user.role))
+
+
+@app.get("/api/v1/auth/me", response_model=UserInfo)
+def me(user: User = Depends(get_current_user)) -> User:
+    return user
 
 
 @app.get("/api/v1/projects", response_model=list[ProjectInfo])

@@ -141,3 +141,22 @@ class RestoreRequest(BaseModel):
         if not TS_RE.match(v):
             raise ValueError("invalid backup timestamp")
         return v
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+
+class UserInfo(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    email: str
+    role: str
+    org_id: int | None = None

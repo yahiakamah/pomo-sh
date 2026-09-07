@@ -20,6 +20,10 @@ class Settings:
     docker_api_version: str = os.getenv("DOCKER_API_VERSION", "auto")
     backups_dir: str = os.getenv("BACKUPS_DIR", "/backups")
     host_backups_dir: str = os.getenv("HOST_BACKUPS_DIR", "/opt/pomo/backups")
+    jwt_secret: str = os.getenv("JWT_SECRET", "")
+    jwt_expire_hours: int = int(os.getenv("JWT_EXPIRE_HOURS", "12"))
+    admin_email: str = os.getenv("ADMIN_EMAIL", "")
+    admin_password: str = os.getenv("ADMIN_PASSWORD", "")
 
     supported_versions = {"16", "17", "18", "19"}
 

@@ -105,6 +105,7 @@
     </div>
   </div>
 
+  <div class="card hidden" id="bkPanel"></div>
   <table>
     <thead><tr><th style="width:20px"></th><th>Instance</th><th>Stage</th><th>Version</th><th>Status</th><th></th></tr></thead>
     <tbody id="rows"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
@@ -114,7 +115,8 @@
 </div>
 
 <script>
-const API = "/api/v1";
+const API = "/api/v1"; /* POMO_BUILD_MARKER v3 */
+  console.log('[pomo] dashboard build v3 loaded');
 const $ = (id) => document.getElementById(id);
 const opts = { headers: { "Content-Type": "application/json" }, credentials: "same-origin" };
 
@@ -200,8 +202,27 @@ function renderRows(envs){
       <td>${badge(e.state)}</td>
       <td>${actionsFor(e)}</td>
     </tr>`;
-    return main + (expanded===e.slug ? drawerHtml(e) : "");
+    return main;
   }).join("");
+}
+
+
+function renderPanel(){
+  const el = document.getElementById("bkPanel");
+  if(!expanded){ el.classList.add("hidden"); el.innerHTML=""; return; }
+  const e = lastEnvs.find(x=>x.slug===expanded);
+  if(!e){ el.classList.add("hidden"); return; }
+  const host = location.hostname.replace(/^api\./,"");
+  const backups = backupsCache[e.slug];
+  let bk;
+  if(backups===undefined) bk = '<div class="sub">Loading backups…</div>';
+  else if(backups.length===0) bk = '<div class="sub">No backups yet. Click Backup to create one.</div>';
+  else bk = backups.map(b=>`<div class="bk"><div class="meta"><span class="t">${b.timestamp}</span> <span class="s">· db ${fmtBytes(b.dump_bytes)} · files ${fmtBytes(b.filestore_bytes)}</span></div><button class="ghost danger" data-act="restore" data-slug="${e.slug}" data-ts="${b.timestamp}">Restore</button></div>`).join("");
+  el.classList.remove("hidden");
+  el.innerHTML = `<div class="row" style="justify-content:space-between;margin-bottom:8px"><h3 style="margin:0">${e.slug} — details</h3><button class="ghost" data-close-panel="1">✕ Close</button></div>`+
+    `<div class="kv">Repo: <b>${e.repo_url||"—"}</b>${e.repo_url?` · branch <b>${e.git_branch||"main"}</b>`:""} · URL <b>${e.slug}.${host}</b></div>`+
+    `<div class="row" style="justify-content:space-between"><div style="font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px">Backups</div><button class="ghost" data-act="backup" data-slug="${e.slug}">+ New backup</button></div>`+
+    bk;
 }
 
 let lastEnvs = [];
@@ -212,6 +233,7 @@ async function load(){
     lastEnvs = envs;
     renderStats(envs, projects);
     renderRows(envs);
+    renderPanel();
     $("ts").textContent = "updated " + new Date().toLocaleTimeString();
   }catch(err){
     $("rows").innerHTML = `<tr><td colspan="6" class="empty">Error loading: ${err.message}</td></tr>`;
@@ -219,20 +241,26 @@ async function load(){
 }
 
 async function loadBackups(slug){
-  try{ backupsCache[slug] = await api(`/environments/${slug}/backups`); }
-  catch(e){ backupsCache[slug] = []; }
-  renderRows(lastEnvs);
+  console.log("[pomo] loadBackups start:", slug);
+  try{
+    backupsCache[slug] = await api(`/environments/${slug}/backups`);
+    console.log("[pomo] loadBackups got", backupsCache[slug].length, "backups for", slug);
+  }
+  catch(e){ console.error("[pomo] loadBackups error:", e); backupsCache[slug] = []; }
+  renderRows(lastEnvs); renderPanel();
 }
 
 document.addEventListener("click", async (ev)=>{
   const exp = ev.target.closest("[data-expand]");
   if(exp){
     const slug = exp.dataset.expand;
-    if(expanded===slug){ expanded=null; }
-    else { expanded=slug; if(backupsCache[slug]===undefined){ loadBackups(slug); } }
-    renderRows(lastEnvs);
+    expanded = (expanded===slug) ? null : slug;
+    if(expanded){ loadBackups(expanded); }
+    renderRows(lastEnvs); renderPanel();
     return;
   }
+  const cp = ev.target.closest("[data-close-panel]");
+  if(cp){ expanded=null; renderPanel(); return; }
   const btn = ev.target.closest("button[data-act]");
   if(!btn) return;
   const {act, slug, ts} = btn.dataset;

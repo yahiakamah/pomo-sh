@@ -24,16 +24,6 @@ services:
       - "traefik.http.routers.dashboard.middlewares=dashauth"
       - "traefik.http.middlewares.dashauth.basicauth.usersfile=/auth/users"
 
-  whoami:
-    image: traefik/whoami
-    restart: unless-stopped
-    networks: [pomo_edge]
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.whoami.rule=Host(`hello.pomotech.sh`)"
-      - "traefik.http.routers.whoami.entrypoints=websecure"
-      - "traefik.http.routers.whoami.tls.certresolver=cloudflare"
-
   postgres:
     image: postgres:16
     restart: unless-stopped
@@ -64,6 +54,9 @@ services:
       - INTERNAL_NETWORK=pomo_internal
       - BACKUPS_DIR=/backups
       - HOST_BACKUPS_DIR=/opt/pomo/backups
+      - JWT_SECRET=${JWT_SECRET}
+      - ADMIN_EMAIL=${ADMIN_EMAIL}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - CERT_RESOLVER=cloudflare
       - DEFAULT_ODOO_IMAGE=odoo:{version}
     volumes:
@@ -84,6 +77,11 @@ services:
       - "traefik.http.routers.api-webhook.tls.certresolver=cloudflare"
       - "traefik.http.routers.api-webhook.priority=100"
       - "traefik.http.routers.api-webhook.service=api"
+      - "traefik.http.routers.api-auth.rule=Host(`api.pomotech.sh`) && PathPrefix(`/api/v1/auth`)"
+      - "traefik.http.routers.api-auth.entrypoints=websecure"
+      - "traefik.http.routers.api-auth.tls.certresolver=cloudflare"
+      - "traefik.http.routers.api-auth.priority=100"
+      - "traefik.http.routers.api-auth.service=api"
 
   worker:
     build: ./control-plane
@@ -99,6 +97,9 @@ services:
       - INTERNAL_NETWORK=pomo_internal
       - BACKUPS_DIR=/backups
       - HOST_BACKUPS_DIR=/opt/pomo/backups
+      - JWT_SECRET=${JWT_SECRET}
+      - ADMIN_EMAIL=${ADMIN_EMAIL}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - CERT_RESOLVER=cloudflare
       - DEFAULT_ODOO_IMAGE=odoo:{version}
     volumes:
