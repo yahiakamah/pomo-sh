@@ -6,6 +6,17 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .database import Base
 
 
+class Repo(Base):
+    __tablename__ = "repos"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    full_name: Mapped[str] = mapped_column(String(200), unique=True, index=True)
+    webhook_secret: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 class Project(Base):
     __tablename__ = "projects"
 
@@ -37,6 +48,8 @@ class Environment(Base):
     addons_subdir: Mapped[str | None] = mapped_column(String(255), nullable=True)
     modules: Mapped[str | None] = mapped_column(String(255), nullable=True)
     git_ref: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    repo_id: Mapped[int | None] = mapped_column(ForeignKey("repos.id"), nullable=True)
+    repo: Mapped["Repo | None"] = relationship()
 
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"))
     project: Mapped["Project"] = relationship(back_populates="environments")

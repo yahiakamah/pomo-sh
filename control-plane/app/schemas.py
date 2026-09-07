@@ -101,3 +101,21 @@ class ProjectInfo(BaseModel):
     name: str
     created_at: dt.datetime | None = None
     environment_count: int = 0
+
+
+class RepoCreate(BaseModel):
+    repo_url: str
+
+    @field_validator("repo_url")
+    @classmethod
+    def _validate(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v.startswith("https://"):
+            raise ValueError("repo_url must be an https:// git URL")
+        return v
+
+
+class RepoInfo(BaseModel):
+    full_name: str
+    webhook_url: str
+    secret: str | None = None

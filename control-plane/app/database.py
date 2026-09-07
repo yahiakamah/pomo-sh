@@ -19,6 +19,7 @@ _PG_COLUMNS = [
     "ALTER TABLE environments ADD COLUMN IF NOT EXISTS addons_subdir varchar(255)",
     "ALTER TABLE environments ADD COLUMN IF NOT EXISTS modules varchar(255)",
     "ALTER TABLE environments ADD COLUMN IF NOT EXISTS git_ref varchar(64)",
+    "ALTER TABLE environments ADD COLUMN IF NOT EXISTS repo_id integer",
 ]
 
 
