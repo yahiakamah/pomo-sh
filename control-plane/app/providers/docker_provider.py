@@ -234,3 +234,43 @@ class DockerProvider(InfrastructureProvider):
         if not container:
             raise ValueError(f"environment '{slug}' not found")
         container.restart()
+
+
+    def redeploy_environment(self, slug, branch="main", modules=None, addons_subdir=""):
+        container = self._find(slug)
+        if not container:
+            raise ValueError(f"environment '{slug}' not found")
+        if not self.client.volumes.list(filters={"name": _src_volume(slug)}):
+            raise RuntimeError(f"environment '{slug}' has no git source")
+
+        raw = container.attrs.get("Config", {}).get("Env", []) or []
+        envd = dict(e.split("=", 1) for e in raw if "=" in e)
+        env = {k: envd[k] for k in ("HOST", "PORT", "USER", "PASSWORD") if k in envd}
+        image = container.attrs.get("Config", {}).get("Image") or self._image("18")
+        db = _db_name(slug)
+        src_vol = _src_volume(slug)
+
+        pull = (f"set -e; git -C /repo fetch --depth 1 origin {branch}; "
+                f"git -C /repo reset --hard origin/{branch}")
+        try:
+            self.client.containers.run(
+                GIT_IMAGE, entrypoint="", command=["sh", "-c", pull],
+                volumes={src_vol: {"bind": "/repo", "mode": "rw"}},
+                remove=True, detach=False,
+            )
+        except docker.errors.DockerException:
+            raise RuntimeError(f"git pull failed for '{slug}' (branch '{branch}')") from None
+
+        mods = ",".join(modules) if modules else "all"
+        upd = ["odoo", "-d", db, "-u", mods, "--stop-after-init", "--no-http",
+               self._addons_path(addons_subdir or "")]
+        self.client.containers.run(
+            image, command=upd, environment=env,
+            network=settings.internal_network,
+            volumes={src_vol: {"bind": REPO_MOUNT, "mode": "rw"}},
+            remove=True, detach=False,
+        )
+
+        container.restart()
+        container.reload()
+        return self._info(container)

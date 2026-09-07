@@ -48,3 +48,33 @@ def destroy_environment(slug: str, drop_data: bool) -> None:
             db.commit()
     finally:
         db.close()
+
+
+def redeploy_environment(env_id: int) -> None:
+    db = SessionLocal()
+    try:
+        env = db.get(Environment, env_id)
+        if env is None:
+            return
+        if not env.repo_url:
+            env.state = "error"
+            env.detail = "no git source to redeploy"
+            db.commit()
+            return
+        env.state = "deploying"
+        env.detail = "git pull + update"
+        db.commit()
+        try:
+            modules = [m for m in (env.modules or "").split(",") if m]
+            provider.redeploy_environment(
+                env.slug, branch=env.git_branch or "main",
+                modules=modules, addons_subdir=env.addons_subdir or "",
+            )
+            env.state = "running"
+            env.detail = None
+        except Exception as exc:  # noqa: BLE001
+            env.state = "error"
+            env.detail = str(exc)[:500]
+        db.commit()
+    finally:
+        db.close()

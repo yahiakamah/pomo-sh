@@ -25,6 +25,9 @@ class InfrastructureProvider(ABC):
     @abstractmethod
     def restart_environment(self, slug: str) -> None: ...
 
+    def redeploy_environment(self, slug: str, **kwargs) -> None:
+        raise NotImplementedError("redeploy_environment: NOT IMPLEMENTED")
+
     def scale_environment(self, slug: str, **kwargs) -> None:
         raise NotImplementedError("scale_environment: NOT IMPLEMENTED")
 

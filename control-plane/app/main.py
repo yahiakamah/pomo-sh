@@ -80,7 +80,7 @@ def _reconcile(db: Session) -> None:
                     project_id=project.id,
                 )
             )
-        elif row.state not in ("queued", "provisioning", "error", "destroying"):
+        elif row.state not in ("queued", "provisioning", "deploying", "error", "destroying"):
             row.state = info.state
             row.container_id = info.container_id
             row.url = info.url
@@ -140,7 +140,7 @@ def get_environment(slug: str, db: Session = Depends(get_db)) -> EnvironmentInfo
     env = db.scalar(select(Environment).where(Environment.slug == slug))
     if env is None:
         raise HTTPException(404, f"environment '{slug}' not found")
-    if env.state not in ("queued", "provisioning", "error", "destroying"):
+    if env.state not in ("queued", "provisioning", "deploying", "error", "destroying"):
         info = provider.get_environment(slug)
         if info:
             env.state = info.state
@@ -158,6 +158,19 @@ def delete_environment(slug: str, drop_data: bool = False, db: Session = Depends
     db.commit()
     task_queue.enqueue(tasks.destroy_environment, slug, drop_data)
     return {"slug": slug, "state": "destroying", "drop_data": drop_data}
+
+
+@app.post("/api/v1/environments/{slug}/redeploy", status_code=202)
+def redeploy_environment(slug: str, db: Session = Depends(get_db)) -> dict:
+    env = db.scalar(select(Environment).where(Environment.slug == slug))
+    if env is None:
+        raise HTTPException(404, f"environment '{slug}' not found")
+    if not env.repo_url:
+        raise HTTPException(400, f"environment '{slug}' has no git source")
+    env.state = "deploying"
+    db.commit()
+    task_queue.enqueue(tasks.redeploy_environment, env.id)
+    return {"slug": slug, "state": "deploying"}
 
 
 @app.post("/api/v1/environments/{slug}/{action}", response_model=EnvironmentInfo)
