@@ -69,8 +69,6 @@ services:
       - "traefik.http.routers.api.rule=Host(`api.pomotech.sh`)"
       - "traefik.http.routers.api.entrypoints=websecure"
       - "traefik.http.routers.api.tls.certresolver=cloudflare"
-      - "traefik.http.routers.api.middlewares=apiauth"
-      - "traefik.http.middlewares.apiauth.basicauth.usersfile=/auth/users"
       - "traefik.http.services.api.loadbalancer.server.port=8000"
       - "traefik.http.routers.api-webhook.rule=Host(`api.pomotech.sh`) && PathPrefix(`/api/v1/webhooks`)"
       - "traefik.http.routers.api-webhook.entrypoints=websecure"

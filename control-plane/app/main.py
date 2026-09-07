@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from . import tasks
 from .config import settings
 from .database import SessionLocal, init_db
-from .models import Environment, Project, Repo, User
+from .models import Environment, Organization, Project, Repo, User
 from .providers.docker_provider import DockerProvider
 from .auth import create_token, decode_token, hash_password, verify_password
 from .queue import task_queue
@@ -25,8 +25,13 @@ from .schemas import (
     RepoCreate,
     RepoInfo,
     LoginRequest,
+    OrgCreate,
+    OrgInfo,
+    ProjectAssign,
+    RepoTestRequest,
     RestoreRequest,
     TokenResponse,
+    UserCreate,
     UserInfo,
 )
 
@@ -82,6 +87,29 @@ def get_current_user(
     if user is None:
         raise HTTPException(401, "user not found")
     return user
+
+
+def require_superadmin(user: User = Depends(get_current_user)) -> User:
+    if user.role != "superadmin":
+        raise HTTPException(403, "super-admin only")
+    return user
+
+
+def _owns(user: User, env: Environment) -> bool:
+    if user.role == "superadmin":
+        return True
+    return (
+        env.project is not None
+        and env.project.org_id is not None
+        and env.project.org_id == user.org_id
+    )
+
+
+def _get_owned_env(db: Session, user: User, slug: str) -> Environment:
+    env = db.scalar(select(Environment).where(Environment.slug == slug))
+    if env is None or not _owns(user, env):
+        raise HTTPException(404, f"environment '{slug}' not found")
+    return env
 
 
 def _url(slug: str) -> str:
@@ -178,9 +206,64 @@ def me(user: User = Depends(get_current_user)) -> User:
     return user
 
 
+# ---- admin: organizations & users (super-admin only) ----
+
+@app.get("/api/v1/orgs", response_model=list[OrgInfo])
+def list_orgs(_: User = Depends(require_superadmin), db: Session = Depends(get_db)):
+    return db.scalars(select(Organization)).all()
+
+
+@app.post("/api/v1/orgs", response_model=OrgInfo, status_code=201)
+def create_org(body: OrgCreate, _: User = Depends(require_superadmin), db: Session = Depends(get_db)):
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(400, "name required")
+    if db.scalar(select(Organization).where(Organization.name == name)):
+        raise HTTPException(409, f"organization '{name}' already exists")
+    org = Organization(name=name)
+    db.add(org)
+    db.commit()
+    db.refresh(org)
+    return org
+
+
+@app.get("/api/v1/users", response_model=list[UserInfo])
+def list_users(_: User = Depends(require_superadmin), db: Session = Depends(get_db)):
+    return db.scalars(select(User)).all()
+
+
+@app.post("/api/v1/users", response_model=UserInfo, status_code=201)
+def create_user(body: UserCreate, _: User = Depends(require_superadmin), db: Session = Depends(get_db)):
+    if db.scalar(select(User).where(User.email == body.email)):
+        raise HTTPException(409, f"user '{body.email}' already exists")
+    if db.get(Organization, body.org_id) is None:
+        raise HTTPException(404, f"organization {body.org_id} not found")
+    user = User(email=body.email, password_hash=hash_password(body.password),
+                role="member", org_id=body.org_id)
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+@app.post("/api/v1/projects/{name}/assign", response_model=ProjectAssign)
+def assign_project(name: str, body: ProjectAssign,
+                   _: User = Depends(require_superadmin), db: Session = Depends(get_db)):
+    project = db.scalar(select(Project).where(Project.name == name))
+    if project is None:
+        raise HTTPException(404, f"project '{name}' not found")
+    if db.get(Organization, body.org_id) is None:
+        raise HTTPException(404, f"organization {body.org_id} not found")
+    project.org_id = body.org_id
+    db.commit()
+    return body
+
+
 @app.get("/api/v1/projects", response_model=list[ProjectInfo])
-def list_projects(db: Session = Depends(get_db)) -> list[ProjectInfo]:
+def list_projects(user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> list[ProjectInfo]:
     projects = db.scalars(select(Project)).all()
+    if user.role != "superadmin":
+        projects = [p for p in projects if p.org_id is not None and p.org_id == user.org_id]
     return [
         ProjectInfo(name=p.name, created_at=p.created_at, environment_count=len(p.environments))
         for p in projects
@@ -188,14 +271,15 @@ def list_projects(db: Session = Depends(get_db)) -> list[ProjectInfo]:
 
 
 @app.get("/api/v1/environments", response_model=list[EnvironmentInfo])
-def list_environments(db: Session = Depends(get_db)) -> list[EnvironmentInfo]:
-    _reconcile(db)
+def list_environments(user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> list[EnvironmentInfo]:
+    if user.role == "superadmin":
+        _reconcile(db)
     envs = db.scalars(select(Environment)).all()
-    return [_to_info(e) for e in envs]
+    return [_to_info(e) for e in envs if _owns(user, e)]
 
 
 @app.post("/api/v1/environments", response_model=EnvironmentInfo, status_code=202)
-def create_environment(spec: EnvironmentCreate, db: Session = Depends(get_db)):
+def create_environment(spec: EnvironmentCreate, _: User = Depends(require_superadmin), db: Session = Depends(get_db)):
     existing = db.scalar(select(Environment).where(Environment.slug == spec.slug))
     if existing:
         raise HTTPException(409, f"environment '{spec.slug}' already exists")
@@ -224,10 +308,8 @@ def create_environment(spec: EnvironmentCreate, db: Session = Depends(get_db)):
 
 
 @app.get("/api/v1/environments/{slug}", response_model=EnvironmentInfo)
-def get_environment(slug: str, db: Session = Depends(get_db)) -> EnvironmentInfo:
-    env = db.scalar(select(Environment).where(Environment.slug == slug))
-    if env is None:
-        raise HTTPException(404, f"environment '{slug}' not found")
+def get_environment(slug: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> EnvironmentInfo:
+    env = _get_owned_env(db, user, slug)
     if env.state not in ("queued", "provisioning", "deploying", "restoring", "error", "destroying"):
         info = provider.get_environment(slug)
         if info:
@@ -238,25 +320,34 @@ def get_environment(slug: str, db: Session = Depends(get_db)) -> EnvironmentInfo
 
 
 @app.delete("/api/v1/environments/{slug}", status_code=202)
-def delete_environment(slug: str, drop_data: bool = False, db: Session = Depends(get_db)) -> dict:
-    env = db.scalar(select(Environment).where(Environment.slug == slug))
-    if env is None:
-        raise HTTPException(404, f"environment '{slug}' not found")
+def delete_environment(slug: str, drop_data: bool = False, user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> dict:
+    env = _get_owned_env(db, user, slug)
     env.state = "destroying"
     db.commit()
     task_queue.enqueue(tasks.destroy_environment, slug, drop_data)
     return {"slug": slug, "state": "destroying", "drop_data": drop_data}
 
 
+@app.post("/api/v1/repos/test")
+def test_repo_connection(body: RepoTestRequest, _: User = Depends(get_current_user)) -> dict:
+    try:
+        found = provider.test_repo(body.repo_url, body.git_branch, body.git_token)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "message": str(exc)[:200]}
+    if found:
+        return {"ok": True, "message": f"OK - branch '{body.git_branch}' reachable"}
+    return {"ok": False, "message": f"repo reachable but branch '{body.git_branch}' not found"}
+
+
 @app.post("/api/v1/repos", response_model=RepoInfo)
-def upsert_repo(body: RepoCreate, db: Session = Depends(get_db)) -> RepoInfo:
+def upsert_repo(body: RepoCreate, _: User = Depends(require_superadmin), db: Session = Depends(get_db)) -> RepoInfo:
     repo = _get_or_create_repo(db, body.repo_url)
     db.commit()
     return RepoInfo(full_name=repo.full_name, webhook_url=_webhook_url(), secret=repo.webhook_secret)
 
 
 @app.get("/api/v1/repos", response_model=list[RepoInfo])
-def list_repos(db: Session = Depends(get_db)) -> list[RepoInfo]:
+def list_repos(_: User = Depends(require_superadmin), db: Session = Depends(get_db)) -> list[RepoInfo]:
     repos = db.scalars(select(Repo)).all()
     return [RepoInfo(full_name=r.full_name, webhook_url=_webhook_url()) for r in repos]
 
@@ -310,10 +401,8 @@ async def github_webhook(request: Request, db: Session = Depends(get_db)) -> dic
 
 
 @app.post("/api/v1/environments/{slug}/redeploy", status_code=202)
-def redeploy_environment(slug: str, db: Session = Depends(get_db)) -> dict:
-    env = db.scalar(select(Environment).where(Environment.slug == slug))
-    if env is None:
-        raise HTTPException(404, f"environment '{slug}' not found")
+def redeploy_environment(slug: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> dict:
+    env = _get_owned_env(db, user, slug)
     if not env.repo_url:
         raise HTTPException(400, f"environment '{slug}' has no git source")
     env.state = "deploying"
@@ -323,10 +412,8 @@ def redeploy_environment(slug: str, db: Session = Depends(get_db)) -> dict:
 
 
 @app.post("/api/v1/environments/{slug}/restore", status_code=202)
-def restore_environment(slug: str, body: RestoreRequest, db: Session = Depends(get_db)) -> dict:
-    env = db.scalar(select(Environment).where(Environment.slug == slug))
-    if env is None:
-        raise HTTPException(404, f"environment '{slug}' not found")
+def restore_environment(slug: str, body: RestoreRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> dict:
+    env = _get_owned_env(db, user, slug)
     env.state = "restoring"
     db.commit()
     task_queue.enqueue(tasks.restore_environment, env.id, body.timestamp)
@@ -334,27 +421,21 @@ def restore_environment(slug: str, body: RestoreRequest, db: Session = Depends(g
 
 
 @app.post("/api/v1/environments/{slug}/backup", status_code=202)
-def backup_environment(slug: str, db: Session = Depends(get_db)) -> dict:
-    env = db.scalar(select(Environment).where(Environment.slug == slug))
-    if env is None:
-        raise HTTPException(404, f"environment '{slug}' not found")
+def backup_environment(slug: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> dict:
+    env = _get_owned_env(db, user, slug)
     task_queue.enqueue(tasks.backup_environment, slug)
     return {"slug": slug, "status": "backup queued"}
 
 
 @app.get("/api/v1/environments/{slug}/backups", response_model=list[BackupInfo])
-def list_backups(slug: str, db: Session = Depends(get_db)) -> list[BackupInfo]:
-    env = db.scalar(select(Environment).where(Environment.slug == slug))
-    if env is None:
-        raise HTTPException(404, f"environment '{slug}' not found")
+def list_backups(slug: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> list[BackupInfo]:
+    _get_owned_env(db, user, slug)
     return provider.list_backups(slug)
 
 
 @app.post("/api/v1/environments/{slug}/{action}", response_model=EnvironmentInfo)
-def environment_action(slug: str, action: str, db: Session = Depends(get_db)) -> EnvironmentInfo:
-    env = db.scalar(select(Environment).where(Environment.slug == slug))
-    if env is None:
-        raise HTTPException(404, f"environment '{slug}' not found")
+def environment_action(slug: str, action: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> EnvironmentInfo:
+    env = _get_owned_env(db, user, slug)
     actions = {
         "start": provider.start_environment,
         "stop": provider.stop_environment,

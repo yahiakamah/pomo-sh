@@ -160,3 +160,53 @@ class UserInfo(BaseModel):
     email: str
     role: str
     org_id: int | None = None
+
+
+class OrgCreate(BaseModel):
+    name: str
+
+
+class OrgInfo(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+
+
+class UserCreate(BaseModel):
+    email: str
+    password: str
+    org_id: int
+
+    @field_validator("email")
+    @classmethod
+    def _email(cls, v: str) -> str:
+        v = (v or "").strip().lower()
+        if "@" not in v or len(v) < 3:
+            raise ValueError("invalid email")
+        return v
+
+    @field_validator("password")
+    @classmethod
+    def _pw(cls, v: str) -> str:
+        if len(v or "") < 8:
+            raise ValueError("password must be at least 8 characters")
+        return v
+
+
+class ProjectAssign(BaseModel):
+    org_id: int
+
+
+class RepoTestRequest(BaseModel):
+    repo_url: str
+    git_branch: str = "main"
+    git_token: str | None = None
+
+    @field_validator("repo_url")
+    @classmethod
+    def _u(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v.startswith("https://"):
+            raise ValueError("repo_url must be an https:// git URL")
+        return v

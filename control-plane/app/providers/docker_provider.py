@@ -384,3 +384,17 @@ class DockerProvider(InfrastructureProvider):
         container.start()
         container.reload()
         return self._info(container)
+
+
+    def test_repo(self, repo_url, branch="main", token=None):
+        url = repo_url.replace("https://", f"https://{token}@", 1) if token else repo_url
+        cmd = f"git ls-remote --heads {url} {branch}"
+        try:
+            out = self.client.containers.run(
+                GIT_IMAGE, entrypoint="", command=["sh", "-c", cmd],
+                remove=True, detach=False,
+            )
+        except docker.errors.DockerException:
+            raise RuntimeError("could not reach repository (check URL, token or permissions)") from None
+        text = out.decode() if isinstance(out, (bytes, bytearray)) else str(out)
+        return f"refs/heads/{branch}" in text
