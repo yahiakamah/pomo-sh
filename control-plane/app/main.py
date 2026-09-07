@@ -1,6 +1,9 @@
+import datetime
 import hashlib
 import hmac
 import json
+import threading
+import time as _time
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -28,6 +31,7 @@ from .schemas import (
     OrgCreate,
     OrgInfo,
     ProjectAssign,
+    ExpiryRequest,
     RepoTestRequest,
     RestoreRequest,
     TokenResponse,
@@ -54,6 +58,7 @@ def _bootstrap_admin():
 async def lifespan(app: FastAPI):
     init_db()
     _bootstrap_admin()
+    threading.Thread(target=_expiry_loop, daemon=True).start()
     yield
 
 
@@ -112,6 +117,36 @@ def _get_owned_env(db: Session, user: User, slug: str) -> Environment:
     return env
 
 
+def _enforce_expiries_once() -> None:
+    now = datetime.datetime.now(datetime.timezone.utc)
+    db = SessionLocal()
+    try:
+        rows = db.scalars(select(Environment).where(Environment.expires_at.is_not(None))).all()
+        for env in rows:
+            exp = env.expires_at
+            if exp is not None and exp.tzinfo is None:
+                exp = exp.replace(tzinfo=datetime.timezone.utc)
+            if exp is not None and exp <= now and env.state == "running":
+                try:
+                    provider.stop_environment(env.slug)
+                    env.state = "stopped"
+                    env.detail = "stopped: contract expired"
+                except Exception:  # noqa: BLE001
+                    pass
+        db.commit()
+    finally:
+        db.close()
+
+
+def _expiry_loop() -> None:
+    while True:
+        _time.sleep(300)
+        try:
+            _enforce_expiries_once()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def _url(slug: str) -> str:
     return f"https://{slug}.{settings.base_domain}"
 
@@ -128,6 +163,7 @@ def _to_info(env: Environment) -> EnvironmentInfo:
         project_name=env.project.name if env.project else None,
         repo_url=env.repo_url,
         git_branch=env.git_branch,
+        expires_at=env.expires_at,
         created_at=env.created_at,
     )
 
@@ -418,6 +454,17 @@ def restore_environment(slug: str, body: RestoreRequest, user: User = Depends(ge
     db.commit()
     task_queue.enqueue(tasks.restore_environment, env.id, body.timestamp)
     return {"slug": slug, "state": "restoring", "timestamp": body.timestamp}
+
+
+@app.post("/api/v1/environments/{slug}/expiry")
+def set_expiry(slug: str, body: ExpiryRequest, _: User = Depends(require_superadmin),
+               db: Session = Depends(get_db)) -> dict:
+    env = db.scalar(select(Environment).where(Environment.slug == slug))
+    if env is None:
+        raise HTTPException(404, f"environment '{slug}' not found")
+    env.expires_at = body.expires_at
+    db.commit()
+    return {"slug": slug, "expires_at": env.expires_at.isoformat() if env.expires_at else None}
 
 
 @app.post("/api/v1/environments/{slug}/backup", status_code=202)

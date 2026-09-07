@@ -93,6 +93,7 @@ class EnvironmentInfo(BaseModel):
     project_name: str | None = None
     repo_url: str | None = None
     git_branch: str | None = None
+    expires_at: dt.datetime | None = None
     created_at: dt.datetime | None = None
 
 
@@ -210,3 +211,7 @@ class RepoTestRequest(BaseModel):
         if not v.startswith("https://"):
             raise ValueError("repo_url must be an https:// git URL")
         return v
+
+
+class ExpiryRequest(BaseModel):
+    expires_at: dt.datetime | None = None

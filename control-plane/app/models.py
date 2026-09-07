@@ -73,6 +73,7 @@ class Environment(Base):
     modules: Mapped[str | None] = mapped_column(String(255), nullable=True)
     git_ref: Mapped[str | None] = mapped_column(String(64), nullable=True)
     repo_id: Mapped[int | None] = mapped_column(ForeignKey("repos.id"), nullable=True)
+    expires_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     repo: Mapped["Repo | None"] = relationship()
 
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"))
