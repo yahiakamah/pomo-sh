@@ -22,6 +22,7 @@ from .schemas import (
     ProjectInfo,
     RepoCreate,
     RepoInfo,
+    RestoreRequest,
 )
 
 
@@ -113,7 +114,7 @@ def _reconcile(db: Session) -> None:
                     project_id=project.id,
                 )
             )
-        elif row.state not in ("queued", "provisioning", "deploying", "error", "destroying"):
+        elif row.state not in ("queued", "provisioning", "deploying", "restoring", "error", "destroying"):
             row.state = info.state
             row.container_id = info.container_id
             row.url = info.url
@@ -175,7 +176,7 @@ def get_environment(slug: str, db: Session = Depends(get_db)) -> EnvironmentInfo
     env = db.scalar(select(Environment).where(Environment.slug == slug))
     if env is None:
         raise HTTPException(404, f"environment '{slug}' not found")
-    if env.state not in ("queued", "provisioning", "deploying", "error", "destroying"):
+    if env.state not in ("queued", "provisioning", "deploying", "restoring", "error", "destroying"):
         info = provider.get_environment(slug)
         if info:
             env.state = info.state
@@ -267,6 +268,17 @@ def redeploy_environment(slug: str, db: Session = Depends(get_db)) -> dict:
     db.commit()
     task_queue.enqueue(tasks.redeploy_environment, env.id)
     return {"slug": slug, "state": "deploying"}
+
+
+@app.post("/api/v1/environments/{slug}/restore", status_code=202)
+def restore_environment(slug: str, body: RestoreRequest, db: Session = Depends(get_db)) -> dict:
+    env = db.scalar(select(Environment).where(Environment.slug == slug))
+    if env is None:
+        raise HTTPException(404, f"environment '{slug}' not found")
+    env.state = "restoring"
+    db.commit()
+    task_queue.enqueue(tasks.restore_environment, env.id, body.timestamp)
+    return {"slug": slug, "state": "restoring", "timestamp": body.timestamp}
 
 
 @app.post("/api/v1/environments/{slug}/backup", status_code=202)

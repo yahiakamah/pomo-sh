@@ -35,6 +35,17 @@ class PgAdmin:
             if not cur.fetchone():
                 cur.execute(sql.SQL("CREATE DATABASE {} OWNER {}").format(db_id, role_id))
 
+    def recreate_database(self, db: str, owner: str) -> None:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                "WHERE datname = %s AND pid <> pg_backend_pid()",
+                (db,),
+            )
+            cur.execute(sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(db)))
+            cur.execute(sql.SQL("CREATE DATABASE {} OWNER {}").format(
+                sql.Identifier(db), sql.Identifier(owner)))
+
     def drop_db(self, db: str) -> None:
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(

@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict, field_validator
 
 from .config import settings
 
+TS_RE = re.compile(r"^\d{8}T\d{6}Z$")
 SLUG_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$")
 MODULE_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 SUBDIR_RE = re.compile(r"^[A-Za-z0-9._/-]*$")
@@ -128,3 +129,15 @@ class BackupInfo(BaseModel):
     dump_bytes: int | None = None
     filestore_bytes: int | None = None
     created_at: str | None = None
+
+
+class RestoreRequest(BaseModel):
+    timestamp: str
+
+    @field_validator("timestamp")
+    @classmethod
+    def _validate(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not TS_RE.match(v):
+            raise ValueError("invalid backup timestamp")
+        return v

@@ -339,3 +339,48 @@ class DockerProvider(InfrastructureProvider):
                 except Exception:  # noqa: BLE001
                     pass
         return out
+
+
+    def restore_environment(self, slug, timestamp, **kwargs):
+        container = self._find(slug)
+        if not container:
+            raise ValueError(f"environment '{slug}' not found")
+        local_dir = os.path.join(settings.backups_dir, slug, timestamp)
+        host_dir = os.path.join(settings.host_backups_dir, slug, timestamp)
+        if not os.path.isfile(os.path.join(local_dir, "dump.sql")):
+            raise RuntimeError(f"backup '{timestamp}' not found for '{slug}'")
+
+        db = _db_name(slug)
+        role = _role_name(slug)
+        raw = container.attrs.get("Config", {}).get("Env", []) or []
+        envd = dict(e.split("=", 1) for e in raw if "=" in e)
+        role_pw = envd.get("PASSWORD", "")
+
+        container.stop()
+        self.pg.recreate_database(db, role)
+
+        self.client.containers.run(
+            "postgres:16",
+            command=["psql", "-h", settings.postgres_host, "-p", str(settings.postgres_port),
+                     "-U", role, "-d", db, "-v", "ON_ERROR_STOP=1",
+                     "-q", "-f", "/in/dump.sql"],
+            environment={"PGPASSWORD": role_pw},
+            network=settings.internal_network,
+            volumes={host_dir: {"bind": "/in", "mode": "ro"}},
+            remove=True, detach=False,
+        )
+
+        if os.path.isfile(os.path.join(local_dir, "filestore.tar.gz")):
+            self.client.containers.run(
+                "alpine", entrypoint="",
+                command=["sh", "-c",
+                         "rm -rf /data/* /data/..?* 2>/dev/null; "
+                         "tar xzf /in/filestore.tar.gz -C /data 2>/dev/null || true"],
+                volumes={_data_volume(slug): {"bind": "/data", "mode": "rw"},
+                         host_dir: {"bind": "/in", "mode": "ro"}},
+                remove=True, detach=False,
+            )
+
+        container.start()
+        container.reload()
+        return self._info(container)

@@ -85,3 +85,24 @@ def backup_environment(slug: str) -> None:
         provider.backup_environment(slug)
     except Exception as exc:  # noqa: BLE001
         print(f"[backup] failed for {slug}: {exc}", flush=True)
+
+
+def restore_environment(env_id: int, timestamp: str) -> None:
+    db = SessionLocal()
+    try:
+        env = db.get(Environment, env_id)
+        if env is None:
+            return
+        env.state = "restoring"
+        env.detail = f"restoring backup {timestamp}"
+        db.commit()
+        try:
+            provider.restore_environment(env.slug, timestamp)
+            env.state = "running"
+            env.detail = None
+        except Exception as exc:  # noqa: BLE001
+            env.state = "error"
+            env.detail = str(exc)[:500]
+        db.commit()
+    finally:
+        db.close()
