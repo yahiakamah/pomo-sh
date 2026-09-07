@@ -62,10 +62,13 @@ services:
       - BASE_DOMAIN=pomotech.sh
       - EDGE_NETWORK=pomo_edge
       - INTERNAL_NETWORK=pomo_internal
+      - BACKUPS_DIR=/backups
+      - HOST_BACKUPS_DIR=/opt/pomo/backups
       - CERT_RESOLVER=cloudflare
       - DEFAULT_ODOO_IMAGE=odoo:{version}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - /opt/pomo/backups:/backups
     networks: [pomo_edge, pomo_internal]
     labels:
       - "traefik.enable=true"
@@ -94,10 +97,13 @@ services:
       - BASE_DOMAIN=pomotech.sh
       - EDGE_NETWORK=pomo_edge
       - INTERNAL_NETWORK=pomo_internal
+      - BACKUPS_DIR=/backups
+      - HOST_BACKUPS_DIR=/opt/pomo/backups
       - CERT_RESOLVER=cloudflare
       - DEFAULT_ODOO_IMAGE=odoo:{version}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - /opt/pomo/backups:/backups
     networks: [pomo_edge, pomo_internal]
 
 volumes:

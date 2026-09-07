@@ -34,5 +34,8 @@ class InfrastructureProvider(ABC):
     def backup_environment(self, slug: str, **kwargs) -> None:
         raise NotImplementedError("backup_environment: NOT IMPLEMENTED")
 
+    def list_backups(self, slug: str) -> list:
+        raise NotImplementedError("list_backups: NOT IMPLEMENTED")
+
     def restore_environment(self, slug: str, **kwargs) -> None:
         raise NotImplementedError("restore_environment: NOT IMPLEMENTED")

@@ -1,3 +1,6 @@
+import datetime
+import json
+import os
 import secrets
 
 import docker
@@ -43,6 +46,14 @@ def _data_volume(slug: str) -> str:
 
 def _src_volume(slug: str) -> str:
     return f"pomo_src_{slug}"
+
+
+def _ts() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _fsize(path: str) -> int:
+    return os.path.getsize(path) if os.path.isfile(path) else 0
 
 
 class DockerProvider(InfrastructureProvider):
@@ -274,3 +285,57 @@ class DockerProvider(InfrastructureProvider):
         container.restart()
         container.reload()
         return self._info(container)
+
+
+    def backup_environment(self, slug, **kwargs):
+        if not self._find(slug):
+            raise ValueError(f"environment '{slug}' not found")
+        ts = _ts()
+        db = _db_name(slug)
+        host_dir = os.path.join(settings.host_backups_dir, slug, ts)
+        local_dir = os.path.join(settings.backups_dir, slug, ts)
+        os.makedirs(local_dir, exist_ok=True)
+
+        self.client.containers.run(
+            "postgres:16",
+            command=["pg_dump", "-h", settings.postgres_host, "-p", str(settings.postgres_port),
+                     "-U", settings.postgres_admin_user, "-d", db,
+                     "--no-owner", "--no-privileges", "-f", "/out/dump.sql"],
+            environment={"PGPASSWORD": settings.postgres_password},
+            network=settings.internal_network,
+            volumes={host_dir: {"bind": "/out", "mode": "rw"}},
+            remove=True, detach=False,
+        )
+
+        self.client.containers.run(
+            "alpine", entrypoint="",
+            command=["sh", "-c", "tar czf /out/filestore.tar.gz -C /data . 2>/dev/null || true"],
+            volumes={_data_volume(slug): {"bind": "/data", "mode": "ro"},
+                     host_dir: {"bind": "/out", "mode": "rw"}},
+            remove=True, detach=False,
+        )
+
+        meta = {
+            "slug": slug, "timestamp": ts, "db": db,
+            "dump_bytes": _fsize(os.path.join(local_dir, "dump.sql")),
+            "filestore_bytes": _fsize(os.path.join(local_dir, "filestore.tar.gz")),
+            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        }
+        with open(os.path.join(local_dir, "meta.json"), "w") as f:
+            json.dump(meta, f)
+        return meta
+
+    def list_backups(self, slug):
+        base_dir = os.path.join(settings.backups_dir, slug)
+        out = []
+        if not os.path.isdir(base_dir):
+            return out
+        for ts in sorted(os.listdir(base_dir), reverse=True):
+            meta_p = os.path.join(base_dir, ts, "meta.json")
+            if os.path.isfile(meta_p):
+                try:
+                    with open(meta_p) as f:
+                        out.append(json.load(f))
+                except Exception:  # noqa: BLE001
+                    pass
+        return out

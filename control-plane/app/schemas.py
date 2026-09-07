@@ -119,3 +119,12 @@ class RepoInfo(BaseModel):
     full_name: str
     webhook_url: str
     secret: str | None = None
+
+
+class BackupInfo(BaseModel):
+    slug: str
+    timestamp: str
+    db: str | None = None
+    dump_bytes: int | None = None
+    filestore_bytes: int | None = None
+    created_at: str | None = None

@@ -15,7 +15,14 @@ from .database import SessionLocal, init_db
 from .models import Environment, Project, Repo
 from .providers.docker_provider import DockerProvider
 from .queue import task_queue
-from .schemas import EnvironmentCreate, EnvironmentInfo, ProjectInfo, RepoCreate, RepoInfo
+from .schemas import (
+    BackupInfo,
+    EnvironmentCreate,
+    EnvironmentInfo,
+    ProjectInfo,
+    RepoCreate,
+    RepoInfo,
+)
 
 
 @asynccontextmanager
@@ -260,6 +267,23 @@ def redeploy_environment(slug: str, db: Session = Depends(get_db)) -> dict:
     db.commit()
     task_queue.enqueue(tasks.redeploy_environment, env.id)
     return {"slug": slug, "state": "deploying"}
+
+
+@app.post("/api/v1/environments/{slug}/backup", status_code=202)
+def backup_environment(slug: str, db: Session = Depends(get_db)) -> dict:
+    env = db.scalar(select(Environment).where(Environment.slug == slug))
+    if env is None:
+        raise HTTPException(404, f"environment '{slug}' not found")
+    task_queue.enqueue(tasks.backup_environment, slug)
+    return {"slug": slug, "status": "backup queued"}
+
+
+@app.get("/api/v1/environments/{slug}/backups", response_model=list[BackupInfo])
+def list_backups(slug: str, db: Session = Depends(get_db)) -> list[BackupInfo]:
+    env = db.scalar(select(Environment).where(Environment.slug == slug))
+    if env is None:
+        raise HTTPException(404, f"environment '{slug}' not found")
+    return provider.list_backups(slug)
 
 
 @app.post("/api/v1/environments/{slug}/{action}", response_model=EnvironmentInfo)

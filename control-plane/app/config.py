@@ -18,6 +18,8 @@ class Settings:
     default_odoo_image: str = os.getenv("DEFAULT_ODOO_IMAGE", "odoo:{version}")
     odoo_core_addons_path: str = os.getenv("ODOO_CORE_ADDONS_PATH", "/usr/lib/python3/dist-packages/odoo/addons")
     docker_api_version: str = os.getenv("DOCKER_API_VERSION", "auto")
+    backups_dir: str = os.getenv("BACKUPS_DIR", "/backups")
+    host_backups_dir: str = os.getenv("HOST_BACKUPS_DIR", "/opt/pomo/backups")
 
     supported_versions = {"16", "17", "18", "19"}
 

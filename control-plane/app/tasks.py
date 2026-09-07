@@ -78,3 +78,10 @@ def redeploy_environment(env_id: int) -> None:
         db.commit()
     finally:
         db.close()
+
+
+def backup_environment(slug: str) -> None:
+    try:
+        provider.backup_environment(slug)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[backup] failed for {slug}: {exc}", flush=True)
