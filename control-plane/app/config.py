@@ -16,6 +16,7 @@ class Settings:
     cert_resolver: str = os.getenv("CERT_RESOLVER", "cloudflare")
 
     default_odoo_image: str = os.getenv("DEFAULT_ODOO_IMAGE", "odoo:{version}")
+    enterprise_odoo_image: str = os.getenv("ENTERPRISE_ODOO_IMAGE", "pomo-odoo-ee:{version}")
     odoo_core_addons_path: str = os.getenv("ODOO_CORE_ADDONS_PATH", "/usr/lib/python3/dist-packages/odoo/addons")
     docker_api_version: str = os.getenv("DOCKER_API_VERSION", "auto")
     backups_dir: str = os.getenv("BACKUPS_DIR", "/backups")

@@ -67,8 +67,9 @@ class DockerProvider(InfrastructureProvider):
             self._client = docker.from_env(version=settings.docker_api_version)
         return self._client
 
-    def _image(self, version: str) -> str:
-        return settings.default_odoo_image.format(version=version)
+    def _image(self, version: str, edition: str = "community") -> str:
+        tpl = settings.enterprise_odoo_image if edition == "enterprise" else settings.default_odoo_image
+        return tpl.format(version=version)
 
     def _url(self, slug: str) -> str:
         return f"https://{slug}.{settings.base_domain}"
@@ -81,9 +82,14 @@ class DockerProvider(InfrastructureProvider):
             "PASSWORD": password,
         }
 
-    def _addons_path(self, subdir: str) -> str:
-        repo_path = REPO_MOUNT + (f"/{subdir}" if subdir else "")
-        return f"--addons-path={settings.odoo_core_addons_path},{repo_path}"
+    def _addons_path(self, subdir: str = "", edition: str = "community", has_repo: bool = True) -> str:
+        parts = []
+        if edition == "enterprise":
+            parts.append("/mnt/enterprise")
+        parts.append(settings.odoo_core_addons_path)
+        if has_repo:
+            parts.append(REPO_MOUNT + (f"/{subdir}" if subdir else ""))
+        return "--addons-path=" + ",".join(parts)
 
     def _traefik_labels(self, slug: str, version: str) -> dict:
         router = f"pomo-{slug}"
@@ -151,7 +157,7 @@ class DockerProvider(InfrastructureProvider):
         if self._find(slug):
             raise ValueError(f"environment '{slug}' already exists")
 
-        image = self._image(version)
+        image = self._image(version, spec.edition)
         db, role = _db_name(slug), _role_name(slug)
         password = secrets.token_urlsafe(18)
 
@@ -166,7 +172,8 @@ class DockerProvider(InfrastructureProvider):
         if spec.repo_url:
             src_vol = self._clone_repo(slug, spec.repo_url, spec.git_branch, spec.git_token)
             odoo_volumes[src_vol] = {"bind": REPO_MOUNT, "mode": "rw"}
-            addons_arg = self._addons_path(spec.addons_subdir)
+        if spec.repo_url or spec.edition == "enterprise":
+            addons_arg = self._addons_path(spec.addons_subdir, spec.edition, has_repo=bool(spec.repo_url))
 
         self.pg.ensure_role_and_db(db, role, password)
         env = self._odoo_env(slug, password)
@@ -247,7 +254,7 @@ class DockerProvider(InfrastructureProvider):
         container.restart()
 
 
-    def redeploy_environment(self, slug, branch="main", modules=None, addons_subdir=""):
+    def redeploy_environment(self, slug, branch="main", modules=None, addons_subdir="", edition="community"):
         container = self._find(slug)
         if not container:
             raise ValueError(f"environment '{slug}' not found")
@@ -274,7 +281,7 @@ class DockerProvider(InfrastructureProvider):
 
         mods = ",".join(modules) if modules else "all"
         upd = ["odoo", "-d", db, "-u", mods, "--stop-after-init", "--no-http",
-               self._addons_path(addons_subdir or "")]
+               self._addons_path(addons_subdir or "", edition, has_repo=True)]
         self.client.containers.run(
             image, command=upd, environment=env,
             network=settings.internal_network,

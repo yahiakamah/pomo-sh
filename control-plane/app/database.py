@@ -22,6 +22,7 @@ _PG_COLUMNS = [
     "ALTER TABLE environments ADD COLUMN IF NOT EXISTS repo_id integer",
     "ALTER TABLE projects ADD COLUMN IF NOT EXISTS org_id integer",
     "ALTER TABLE environments ADD COLUMN IF NOT EXISTS expires_at timestamptz",
+    "ALTER TABLE environments ADD COLUMN IF NOT EXISTS edition varchar(12) DEFAULT 'community'",
 ]
 
 

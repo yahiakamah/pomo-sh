@@ -22,6 +22,7 @@ class EnvironmentCreate(BaseModel):
     addons_subdir: str = ""
     modules: list[str] = []
     git_token: str | None = None
+    edition: str = "community"
 
     @field_validator("slug")
     @classmethod
@@ -68,6 +69,14 @@ class EnvironmentCreate(BaseModel):
             raise ValueError("invalid addons_subdir")
         return v
 
+    @field_validator("edition")
+    @classmethod
+    def _edition(cls, v: str) -> str:
+        v=(v or "community").strip().lower()
+        if v not in {"community","enterprise"}:
+            raise ValueError("edition must be community or enterprise")
+        return v
+
     @field_validator("modules")
     @classmethod
     def _validate_modules(cls, v: list[str]) -> list[str]:
@@ -88,6 +97,7 @@ class EnvironmentInfo(BaseModel):
     stage: str | None = None
     url: str | None = None
     odoo_version: str | None = None
+    edition: str | None = None
     container_id: str | None = None
     detail: str | None = None
     project_name: str | None = None

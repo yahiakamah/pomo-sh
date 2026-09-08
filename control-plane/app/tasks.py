@@ -69,6 +69,7 @@ def redeploy_environment(env_id: int) -> None:
             provider.redeploy_environment(
                 env.slug, branch=env.git_branch or "main",
                 modules=modules, addons_subdir=env.addons_subdir or "",
+                edition=env.edition or "community",
             )
             env.state = "running"
             env.detail = None
