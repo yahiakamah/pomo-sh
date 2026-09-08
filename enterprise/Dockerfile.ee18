@@ -1,2 +1,0 @@
-FROM odoo:18
-COPY 18.0 /mnt/enterprise
